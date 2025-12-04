@@ -29,9 +29,9 @@ class MT5MongoDB:
         # Test connection
         try:
             self.client.admin.command('ping')
-            print(f"✅ Connected to MongoDB: {database_name}")
+            print(f"Connected to MongoDB: {database_name}")
         except ConnectionFailure:
-            print("❌ MongoDB connection failed!")
+            print("MongoDB connection failed!")
             raise
     
     def transform_mt5_data(self, parsed_data):
@@ -250,21 +250,21 @@ class MT5MongoDB:
             )
             
             if result.upserted_id:
-                print(f"✅ Inserted new account {account_number} into MongoDB")
+                print(f"Inserted new account {account_number} into MongoDB")
                 return result.upserted_id
             else:
-                print(f"✅ Updated existing account {account_number} in MongoDB")
+                print(f"Updated existing account {account_number} in MongoDB")
                 return account_number
                 
         except DuplicateKeyError:
-            print(f"⚠️  Account {account_number} already exists, updating...")
+            print(f"Warning: Account {account_number} already exists, updating...")
             result = self.collection.replace_one(
                 {'account': account_number},
                 document
             )
             return account_number
         except Exception as e:
-            print(f"❌ MongoDB operation failed: {e}")
+            print(f"Error: MongoDB operation failed: {e}")
             raise
     
     def get_account_by_number(self, account_number):
@@ -319,11 +319,11 @@ class MT5MongoDB:
                         }
                         active_accounts.append(account)
             
-            print(f"✅ Found {len(active_accounts)} active credentials in MongoDB")
+            print(f"Found {len(active_accounts)} active credentials in MongoDB")
             return active_accounts
             
         except Exception as e:
-            print(f"❌ Failed to fetch credentials from MongoDB: {e}")
+            print(f"Error: Failed to fetch credentials from MongoDB: {e}")
             return []
     
     def update_credential_status(self, login_id, key=None):
@@ -359,20 +359,20 @@ class MT5MongoDB:
             )
             
             if update_result.modified_count > 0:
-                print(f"✅ Updated credential status for login {login_id}")
+                print(f"Updated credential status for login {login_id}")
                 return True
             else:
-                print(f"⚠️  No credential found to update for login {login_id}")
+                print(f"Warning: No credential found to update for login {login_id}")
                 return False
                 
         except Exception as e:
-            print(f"❌ Failed to update credential status for login {login_id}: {e}")
+            print(f"Error: Failed to update credential status for login {login_id}: {e}")
             return False
     
     def close(self):
         """Close the MongoDB connection"""
         self.client.close()
-        print("🔌 MongoDB connection closed")
+        print("MongoDB connection closed")
 
 
 if __name__ == "__main__":

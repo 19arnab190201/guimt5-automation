@@ -51,7 +51,7 @@ def list_all_accounts():
     accounts = db.get_all_accounts()
     
     if not accounts:
-        print("\n❌ No accounts found in database")
+        print("\nNo accounts found in database")
         db.close()
         return
     
@@ -78,7 +78,7 @@ def get_account_details(account_number):
     account = db.get_account_by_number(account_number)
     
     if not account:
-        print(f"\n❌ Account {account_number} not found in database")
+        print(f"\nAccount {account_number} not found in database")
         db.close()
         return
     
@@ -97,7 +97,7 @@ def get_account_details(account_number):
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(account, f, indent=2, default=str)
         
-        print(f"✅ Exported to {filename}")
+        print(f"Exported to {filename}")
     
     db.close()
 
@@ -114,7 +114,7 @@ def get_top_performers(limit=5):
     accounts = db.get_all_accounts()
     
     if not accounts:
-        print("\n❌ No accounts found in database")
+        print("\nNo accounts found in database")
         db.close()
         return
     
@@ -155,7 +155,7 @@ def main():
                 account_num = int(input("\nEnter account number: ").strip())
                 get_account_details(account_num)
             except ValueError:
-                print("❌ Invalid account number")
+                print("Invalid account number")
         
         elif choice == '3':
             try:
@@ -163,21 +163,21 @@ def main():
                 limit = int(limit) if limit else 5
                 get_top_performers(limit)
             except ValueError:
-                print("❌ Invalid number")
+                print("Invalid number")
         
         elif choice == '4':
-            print("\n👋 Goodbye!")
+            print("\nGoodbye!")
             break
         
         else:
-            print("❌ Invalid choice. Please select 1-4.")
+            print("Invalid choice. Please select 1-4.")
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\n👋 Interrupted by user. Goodbye!")
+        print("\n\nInterrupted by user. Goodbye!")
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\nError: {e}")
 

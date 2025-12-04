@@ -7,7 +7,7 @@ import config
 def view_all_credentials():
     """Display all credentials from MongoDB"""
     print("=" * 80)
-    print("📋 MT5 Credentials Viewer")
+    print("MT5 Credentials Viewer")
     print("=" * 80)
     
     try:
@@ -18,15 +18,15 @@ def view_all_credentials():
         )
         
         # Get all credential documents
-        print("\n🔍 Fetching credentials from 'credentialkeys' collection...")
+        print("\nFetching credentials from 'credentialkeys' collection...")
         credential_docs = list(mongo_db.credentials_collection.find())
         
         if not credential_docs:
-            print("❌ No credential documents found!")
+            print("No credential documents found!")
             mongo_db.close()
             return
         
-        print(f"✅ Found {len(credential_docs)} credential document(s)\n")
+        print(f"Found {len(credential_docs)} credential document(s)\n")
         
         total_active = 0
         total_inactive = 0
@@ -36,8 +36,8 @@ def view_all_credentials():
             credentials = doc.get('credentials', [])
             
             print("=" * 80)
-            print(f"🔑 Key: {key}")
-            print(f"📊 Total Credentials: {len(credentials)}")
+            print(f"Key: {key}")
+            print(f"Total Credentials: {len(credentials)}")
             print("=" * 80)
             
             active_creds = [c for c in credentials if c.get('isActive', False)]
@@ -45,7 +45,7 @@ def view_all_credentials():
             breached_creds = [c for c in credentials if c.get('isBreached', False)]
             eligible_creds = [c for c in active_creds if not c.get('isBreached', False)]
             
-            print(f"\n✅ Active & Eligible Credentials ({len(eligible_creds)}):")
+            print(f"\nActive & Eligible Credentials ({len(eligible_creds)}):")
             if eligible_creds:
                 for cred in eligible_creds:
                     print(f"  • Login: {cred['loginId']}")
@@ -61,14 +61,14 @@ def view_all_credentials():
                 print("  (No eligible credentials)\n")
             
             if breached_creds:
-                print(f"🚨 Breached Credentials ({len(breached_creds)}) - Will NOT be processed:")
+                print(f"Breached Credentials ({len(breached_creds)}) - Will NOT be processed:")
                 for cred in breached_creds:
                     print(f"  • Login: {cred['loginId']}")
                     if cred.get('breachedMetadata'):
                         print(f"    Reason: {cred['breachedMetadata']}")
                     print()
             
-            print(f"❌ Inactive Credentials ({len(inactive_creds)}):")
+            print(f"Inactive Credentials ({len(inactive_creds)}):")
             if inactive_creds:
                 for cred in inactive_creds:
                     print(f"  • Login: {cred['loginId']}")
@@ -85,17 +85,17 @@ def view_all_credentials():
         total_breached = sum(1 for doc in credential_docs for c in doc.get('credentials', []) if c.get('isBreached', False))
         
         print("\n" + "=" * 80)
-        print("📊 SUMMARY")
+        print("SUMMARY")
         print("=" * 80)
-        print(f"✅ Total Eligible Credentials (Active & Not Breached): {total_active}")
-        print(f"🚨 Total Breached Credentials: {total_breached}")
-        print(f"❌ Total Inactive Credentials: {total_inactive}")
-        print(f"📁 Total Credentials: {total_active + total_inactive + total_breached}")
+        print(f"Total Eligible Credentials (Active & Not Breached): {total_active}")
+        print(f"Total Breached Credentials: {total_breached}")
+        print(f"Total Inactive Credentials: {total_inactive}")
+        print(f"Total Credentials: {total_active + total_inactive + total_breached}")
         print("=" * 80)
         
         # Show what will be processed
-        print("\n🚀 Credentials that will be processed by automation:")
-        print("📁 Reports will be saved to collection: 'credentials_reports'")
+        print("\nCredentials that will be processed by automation:")
+        print("Reports will be saved to collection: 'credentials_reports'")
         active_accounts = mongo_db.get_active_credentials(server_name=config.SERVER)
         if active_accounts:
             for i, account in enumerate(active_accounts, 1):
@@ -108,7 +108,7 @@ def view_all_credentials():
         mongo_db.close()
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         import traceback
         traceback.print_exc()
 
@@ -116,7 +116,7 @@ def view_all_credentials():
 def view_active_only():
     """Display only active credentials"""
     print("=" * 80)
-    print("✅ Active MT5 Credentials")
+    print("Active MT5 Credentials")
     print("=" * 80)
     
     try:
@@ -128,9 +128,9 @@ def view_active_only():
         active_accounts = mongo_db.get_active_credentials(server_name=config.SERVER)
         
         if not active_accounts:
-            print("\n❌ No active credentials found!")
+            print("\nNo active credentials found!")
         else:
-            print(f"\n✅ Found {len(active_accounts)} active credential(s):\n")
+            print(f"\nFound {len(active_accounts)} active credential(s):\n")
             for i, account in enumerate(active_accounts, 1):
                 print(f"{i}. Login: {account['login']}")
                 print(f"   Server: {account['server']}")
@@ -144,7 +144,7 @@ def view_active_only():
         mongo_db.close()
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
 
 
 if __name__ == "__main__":
@@ -154,5 +154,5 @@ if __name__ == "__main__":
         view_active_only()
     else:
         view_all_credentials()
-        print("\n💡 Tip: Run with --active-only flag to see only active credentials")
+        print("\nTip: Run with --active-only flag to see only active credentials")
 

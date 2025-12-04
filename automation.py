@@ -34,9 +34,9 @@ def close_mt5():
 
 
 def launch_mt5():
-    print("🚀 Launching MT5...")
+    print("Launching MT5...")
     if is_mt5_running():
-        print("🔁 Existing MT5 detected — closing.")
+        print("Existing MT5 detected - closing.")
         close_mt5()
 
     print("11111111111")
@@ -46,12 +46,12 @@ def launch_mt5():
     print("11111111111")
 
     time.sleep(8)
-    print("✅ MT5 launched.")
+    print("MT5 launched.")
 
 
 def login_to_mt5(login, password, server):
     pyautogui.hotkey('shift', 'tab')
-    print(f"🔐 Logging into MT5 with account {login}...")
+    print(f"Logging into MT5 with account {login}...")
     pyautogui.hotkey('alt', 'f')
     time.sleep(1)
     pyautogui.press('l')
@@ -75,22 +75,22 @@ def login_to_mt5(login, password, server):
     pyautogui.write(server, interval=0.1)
     pyautogui.press('enter')
     time.sleep(6)
-    print("✅ Login complete.")
+    print("Login complete.")
 
 
 def generate_report():
     """Generate report via Alt+E path"""
-    print("📄 Generating report via Alt+E...")
+    print("Generating report via Alt+E...")
     pyautogui.hotkey('alt', 'e')
     time.sleep(2)
     pyautogui.press('r')
     time.sleep(2)
-    print("✅ Report dialog opened (user/browser will open shortly).")
+    print("Report dialog opened (user/browser will open shortly).")
 
 
 def save_report(login):
     """Saves report once it opens in browser"""
-    print("💾 Saving report...")
+    print("Saving report...")
     time.sleep(5)
     pyautogui.hotkey('ctrl', 's')
     time.sleep(2)
@@ -102,14 +102,14 @@ def save_report(login):
     time.sleep(3)
 
     full_path = os.path.join(DOWNLOAD_FOLDER, f"{filename}.html")
-    print(f"✅ Report saved: {full_path}")
+    print(f"Report saved: {full_path}")
     return full_path
 
 
 def automate_mt5_report(login, password, server):
     """Main wrapper function to automate MT5 report generation for a single account"""
     print("=" * 70)
-    print(f"🤖 MT5 REPORT AUTOMATION STARTED for account {login}")
+    print(f"MT5 REPORT AUTOMATION STARTED for account {login}")
     print("=" * 70)
 
     try:
@@ -118,11 +118,11 @@ def automate_mt5_report(login, password, server):
         generate_report()
         report_path = save_report(login)
 
-        print("✅ Automation complete.")
+        print("Automation complete.")
         return report_path
 
     except Exception as e:
-        print(f"❌ Automation failed: {e}")
+        print(f"Error: Automation failed: {e}")
         return None
 
 

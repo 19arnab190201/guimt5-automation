@@ -14,7 +14,7 @@ def parse_mt5_report(html_file: str):
     if not match:
         start_idx = html.find("window.__report")
         if start_idx == -1:
-            raise ValueError("❌ Could not find 'window.__report' in HTML.")
+            raise ValueError("Error: Could not find 'window.__report' in HTML.")
         json_start = html.find("{", start_idx)
         json_end = html.find("};", json_start)
         json_text = html[json_start:json_end + 1]
@@ -39,17 +39,17 @@ def parse_mt5_report(html_file: str):
     curr_balance = float(data.get("balance", {}).get("balance", 0))
     curr_equity = float(data.get("balance", {}).get("equity", 0))
 
-    print(f"\n📊 ACCOUNT REPORT")
+    print(f"\nACCOUNT REPORT")
     print("=" * 70)
-    print(f"👤 Account: {name}")
-    print(f"🏦 Broker : {broker}")
-    print(f"💰 Currency: {currency}")
-    print(f"💵 Initial Balance: {init_balance:.2f}")
-    print(f"📈 Current Balance: {curr_balance:.2f}")
-    print(f"📉 Current Equity:  {curr_equity:.2f}")
+    print(f"Account: {name}")
+    print(f"Broker : {broker}")
+    print(f"Currency: {currency}")
+    print(f"Initial Balance: {init_balance:.2f}")
+    print(f"Current Balance: {curr_balance:.2f}")
+    print(f"Current Equity:  {curr_equity:.2f}")
 
     # === BALANCE / EQUITY TIMELINE ===
-    print("\n📆 Balance & Equity Timeline")
+    print("\nBalance & Equity Timeline")
     print("-" * 70)
     print(f"{'UTC Timestamp':<25}{'Balance':<15}{'Equity':<15}")
     for p in balance_data:
@@ -65,18 +65,18 @@ def parse_mt5_report(html_file: str):
         overall_dd = (init_balance - lowest_eq) / init_balance * 100
         threshold = 10
 
-        print("\n📉 DRAWDOWN SUMMARY (Calculated)")
+        print("\nDRAWDOWN SUMMARY (Calculated)")
         print("-" * 70)
         print(f"Lowest Equity: {lowest_eq:.2f} ({lowest_time.strftime('%Y-%m-%d %H:%M:%S UTC')})")
         print(f"Overall Drawdown: {overall_dd:.2f}%")
         if overall_dd >= threshold:
-            print("🚨 Breach: Over 10% drawdown limit.")
+            print("Breach: Over 10% drawdown limit.")
         else:
-            print("✅ Within 10% limit.")
+            print("Within 10% limit.")
 
     # === GROWTH & DRAWDOWN ===
     if "growth" in data:
-        print("\n📈 GROWTH & DRAWDOWN (from MT5 report)")
+        print("\nGROWTH & DRAWDOWN (from MT5 report)")
         print("-" * 70)
         growth_chart = data["growth"]["chart"]
         print(f"{'UTC Timestamp':<25}{'Growth %':<15}{'Drawdown %':<15}")
@@ -109,18 +109,18 @@ def parse_mt5_report(html_file: str):
     long_win_rate = (win_trades[1] / long_trades * 100) if long_trades else 0
     short_win_rate = (win_trades[0] / short_trades * 100) if short_trades else 0
 
-    print("\n📊 LONG / SHORT PERFORMANCE")
+    print("\nLONG / SHORT PERFORMANCE")
     print("-" * 70)
     print(f"Total Trades: {total_trades}")
-    print(f"➡️  Long Trades : {long_trades} ({long_ratio:.2f}%)")
-    print(f"⬇️  Short Trades: {short_trades} ({short_ratio:.2f}%)")
+    print(f"Long Trades : {long_trades} ({long_ratio:.2f}%)")
+    print(f"Short Trades: {short_trades} ({short_ratio:.2f}%)")
 
-    print("\n💵 NETTO P/L")
+    print("\nNETTO P/L")
     print(f"Short: {net_pl[0]:.2f}")
     print(f"Long : {net_pl[1]:.2f}")
     print(f"Total: {sum(net_pl):.2f}")
 
-    print("\n✅ Report Parsing Complete.\n")
+    print("\nReport Parsing Complete.\n")
     return data
 
 

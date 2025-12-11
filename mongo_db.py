@@ -2,13 +2,44 @@
 MongoDB integration module for MT5 trading account data
 """
 import os
+from datetime import datetime, timedelta, timezone
 from pymongo import MongoClient, UpdateOne
 from pymongo.errors import ConnectionFailure, DuplicateKeyError
-from datetime import datetime
 
 
 class MT5MongoDB:
     """Handler for MongoDB operations related to MT5 trading accounts"""
+
+    STATUS_ACTIVE = "ACTIVE"
+    STATUS_BREACHED = "BREACHED"
+    STATUS_UNDER_REVIEW = "UNDER REVIEW"
+
+    RULES = {
+        "2_STEP_PHASE_1": {
+            "profit_target": 0.08,
+            "max_loss_limit": 0.08,
+            "daily_loss_limit": 0.04,
+            "leverage": "1:100",
+            "min_profitable_days": 3,
+            "max_inactivity_days": 14,
+        },
+        "2_STEP_PHASE_2": {
+            "profit_target": 0.05,
+            "max_loss_limit": 0.08,
+            "daily_loss_limit": 0.04,
+            "leverage": "1:100",
+            "min_profitable_days": 3,
+            "max_inactivity_days": 14,
+        },
+        "1_STEP": {
+            "profit_target": 0.10,
+            "max_loss_limit": 0.06,
+            "daily_loss_limit": 0.03,
+            "leverage": "1:50",
+            "min_profitable_days": 3,
+            "max_inactivity_days": 14,
+        },
+    }
     
     def __init__(self, connection_string=None, database_name="test"):
         """
@@ -34,7 +65,279 @@ class MT5MongoDB:
             print("MongoDB connection failed!")
             raise
     
-    def transform_mt5_data(self, parsed_data):
+    def _parse_iso_date(self, value):
+        """Parse various date formats found in Mongo/MT5 payloads."""
+        try:
+            if isinstance(value, datetime):
+                return value
+            if isinstance(value, dict) and "$date" in value:
+                return datetime.fromisoformat(value["$date"].replace("Z", "+00:00")).astimezone(timezone.utc)
+            if isinstance(value, str):
+                return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+        except Exception:
+            return None
+        return None
+
+    def _find_credential_key(self, account_number):
+        """Lookup credential key from credentialkeys collection for a login (match string or number)."""
+        if account_number is None:
+            return None
+        try:
+            variants = [str(account_number)]
+            try:
+                variants.append(int(account_number))
+            except Exception:
+                pass
+
+            doc = self.credentials_collection.find_one(
+                {"credentials": {"$elemMatch": {"loginId": {"$in": variants}}}},
+                {"key": 1}
+            )
+            if doc and doc.get("key"):
+                return doc["key"]
+        except Exception:
+            pass
+        return None
+
+    def _infer_program(self, account_name: str, credential_key: str = None):
+        """
+        Infer challenge program from account name.
+        Fallback priority:
+        1) credential key suffix (e.g., 1STEP/2STEP)
+        2) name keywords
+        3) default to 2_STEP_PHASE_1
+        """
+        if credential_key:
+            key_upper = credential_key.upper()
+            if "1STEP" in key_upper:
+                return "1_STEP"
+            if "2STEP" in key_upper:
+                return "2_STEP_PHASE_1"
+
+        lowered = (account_name or "").lower()
+        if "1 step" in lowered or "one step" in lowered:
+            return "1_STEP"
+        if "phase 2" in lowered or "step 2" in lowered or "phase two" in lowered:
+            return "2_STEP_PHASE_2"
+        return "2_STEP_PHASE_1"
+
+    def _daily_start_values(self, balance_chart):
+        """
+        Get starting balance/equity for the current UTC day from chart series.
+        Returns tuple (balance, equity, higher_value, latest_equity, latest_ts)
+        """
+        if not balance_chart:
+            return None, None, None, None, None
+
+        # Use latest point to determine the day
+        latest_point = balance_chart[-1]
+        latest_ts = datetime.fromtimestamp(latest_point.get("x", 0), tz=timezone.utc)
+        latest_equity = latest_point.get("y", [0, 0])[1] if isinstance(latest_point.get("y"), list) else None
+
+        start_balance = latest_point.get("y", [0, 0])[0]
+        start_equity = latest_point.get("y", [0, 0])[1]
+
+        for point in balance_chart:
+            ts = datetime.fromtimestamp(point.get("x", 0), tz=timezone.utc)
+            if ts.date() == latest_ts.date():
+                start_balance = point.get("y", [0, 0])[0]
+                start_equity = point.get("y", [0, 0])[1]
+                break
+
+        higher_value = max(start_balance or 0, start_equity or 0)
+        return start_balance, start_equity, higher_value, latest_equity, latest_ts
+
+    def _count_profitable_days(self, profit_daily_chart, initial_balance):
+        """
+        Count days with at least 1.5% profit from profitDaily.chart.
+        Each day must have net profit >= 1.5% of initial balance (gaps allowed, not consecutive required).
+        """
+        if not initial_balance or initial_balance <= 0:
+            return 0
+        
+        min_profit_threshold = initial_balance * 0.015  # 1.5%
+        profitable = 0
+        
+        for entry in profit_daily_chart or []:
+            y_vals = entry.get("y", [])
+            day_net = 0
+            for val in y_vals:
+                if isinstance(val, (int, float)):
+                    day_net += val
+            
+            # Day is profitable if net profit >= 1.5% of initial balance
+            if day_net >= min_profit_threshold:
+                profitable += 1
+        
+        return profitable
+    
+    def _check_inactivity_breach(self, balance_chart, max_inactivity_days):
+        """
+        Check for consecutive days with no equity change.
+        Returns (is_breached, consecutive_days_without_change)
+        """
+        if not balance_chart or len(balance_chart) < 2:
+            return False, 0
+        
+        # Group points by UTC day
+        daily_equity = {}  # date -> equity value
+        for point in balance_chart:
+            ts = datetime.fromtimestamp(point.get("x", 0), tz=timezone.utc)
+            day_key = ts.date()
+            equity = point.get("y", [0, 0])[1] if isinstance(point.get("y"), list) else point.get("y", 0)
+            # Store the last equity value for each day
+            if day_key not in daily_equity:
+                daily_equity[day_key] = equity
+        
+        # Sort by date
+        sorted_dates = sorted(daily_equity.keys())
+        if len(sorted_dates) < 2:
+            return False, 0
+        
+        # Check for consecutive days with same equity
+        max_consecutive = 0
+        current_consecutive = 1
+        
+        for i in range(1, len(sorted_dates)):
+            prev_date = sorted_dates[i - 1]
+            curr_date = sorted_dates[i]
+            prev_equity = daily_equity[prev_date]
+            curr_equity = daily_equity[curr_date]
+            
+            # Check if equity is unchanged (within small tolerance for floating point)
+            if abs(curr_equity - prev_equity) < 0.01:
+                current_consecutive += 1
+            else:
+                max_consecutive = max(max_consecutive, current_consecutive)
+                current_consecutive = 1
+        
+        max_consecutive = max(max_consecutive, current_consecutive)
+        
+        is_breached = max_consecutive > max_inactivity_days
+        return is_breached, max_consecutive
+
+    def _evaluate_account(self, parsed_data, credential_key=None):
+        """Apply breach rules and return evaluation metadata."""
+        now = datetime.utcnow().replace(tzinfo=timezone.utc)
+        account_info = parsed_data.get("account", {})
+        summary = parsed_data.get("summary", {})
+        balance_block = parsed_data.get("balance", {})
+        summary_indicators = parsed_data.get("summaryIndicators", {})
+
+        account_name = account_info.get("name", "") or ""
+        program = self._infer_program(account_name, credential_key)
+        rules = self.RULES[program]
+
+        initial_balance = float(summary.get("deposit", [0, 0])[0] or 0)
+        current_balance = float(balance_block.get("balance", 0) or 0)
+        current_equity = float(balance_block.get("equity", 0) or 0)
+        balance_chart = balance_block.get("chart", []) or []
+
+        breaches = []
+        consecutive_inactive_days = 0  # Initialize for metrics
+
+        # Maximum loss limit check (critical)
+        if initial_balance > 0:
+            min_balance = min((pt.get("y", [0, 0])[0] for pt in balance_chart), default=current_balance)
+            min_equity = min((pt.get("y", [0, 0])[1] for pt in balance_chart), default=current_equity)
+            worst_value = min(min_balance, min_equity)
+            threshold = initial_balance * (1 - rules["max_loss_limit"])
+            if worst_value < threshold:
+                breaches.append(
+                    {
+                        "rule": "MAX_LOSS_LIMIT",
+                        "severity": "critical",
+                        "observed": worst_value,
+                        "threshold": threshold,
+                        "message": "Minimum balance/equity fell below maximum loss limit.",
+                    }
+                )
+
+        # Daily loss limit check (critical)
+        (
+            day_start_balance,
+            day_start_equity,
+            higher_value,
+            latest_equity,
+            latest_ts,
+        ) = self._daily_start_values(balance_chart)
+        if higher_value is not None and latest_equity is not None:
+            daily_threshold = higher_value * (1 - rules["daily_loss_limit"])
+            if latest_equity < daily_threshold:
+                breaches.append(
+                    {
+                        "rule": "DAILY_LOSS_LIMIT",
+                        "severity": "critical",
+                        "observed": latest_equity,
+                        "threshold": daily_threshold,
+                        "message": "Current equity dropped below daily loss limit.",
+                    }
+                )
+
+        # Inactivity breach check (critical) - consecutive days with no equity change
+        inactivity_breached, consecutive_inactive_days = self._check_inactivity_breach(
+            balance_chart, rules["max_inactivity_days"]
+        )
+        # consecutive_inactive_days is now set for metrics
+        if inactivity_breached:
+            breaches.append(
+                {
+                    "rule": "INACTIVITY",
+                    "severity": "critical",
+                    "observed": consecutive_inactive_days,
+                    "threshold": rules["max_inactivity_days"],
+                    "message": f"Equity unchanged for {consecutive_inactive_days} consecutive days (exceeds {rules['max_inactivity_days']} day limit).",
+                }
+            )
+
+        # Minimum profitable days check (NOT a breach, only for UNDER REVIEW status)
+        # Each day must have >= 1.5% profit (gaps allowed, not consecutive required)
+        profit_daily_chart = parsed_data.get("profitDaily", {}).get("chart", [])
+        profitable_days = self._count_profitable_days(profit_daily_chart, initial_balance)
+
+        # Profit target
+        profit_target_hit = False
+        profit_percent = None
+        if initial_balance > 0:
+            profit_percent = (current_equity - initial_balance) / initial_balance
+            profit_target_hit = profit_percent >= rules["profit_target"]
+
+        # Status derivation
+        status = self.STATUS_ACTIVE
+        is_breached = False
+        if breaches:
+            status = self.STATUS_BREACHED
+            is_breached = True
+        elif profit_target_hit and profitable_days >= rules["min_profitable_days"]:
+            status = self.STATUS_UNDER_REVIEW
+
+        evaluation = {
+            "program": program,
+            "rulesApplied": rules,
+            "evaluatedAt": now,
+            "status": status,
+            "isBreached": is_breached,
+            "breaches": breaches,
+            "breachReasons": [b["rule"] for b in breaches],
+            "credentialKey": credential_key,
+            "metrics": {
+                "initial_balance": initial_balance,
+                "current_balance": current_balance,
+                "current_equity": current_equity,
+                "worst_balance_or_equity": min_balance if initial_balance > 0 else None,
+                "profit_percent": profit_percent,
+                "profit_target_hit": profit_target_hit,
+                "profitable_days": profitable_days,
+                "consecutive_inactive_days": consecutive_inactive_days,
+                "daily_start_balance": day_start_balance,
+                "daily_start_equity": day_start_equity,
+                "latest_equity": latest_equity,
+            },
+        }
+
+        return evaluation
+
+    def transform_mt5_data(self, parsed_data, credential_key=None):
         """
         Transform parsed MT5 report data to match MongoDB schema
         
@@ -69,6 +372,8 @@ class MT5MongoDB:
         risks_mfe_mae_percent = parsed_data.get('risksMfeMaePercent', {})
         risks_mfe_mae_money = parsed_data.get('risksMfeMaeMoney', {})
         summary_indicators = parsed_data.get('summaryIndicators', {})
+        
+        evaluation = self._evaluate_account(parsed_data, credential_key)
         
         # Build the document according to schema
         document = {
@@ -200,6 +505,7 @@ class MT5MongoDB:
                 'period': drawdown.get('period', 0),
                 'chart': drawdown.get('chart', [])
             },
+            'credentialKey': credential_key,
             'risksIndicators': {
                 'profit': risks_indicators.get('profit', [0, 0]),
                 'max_consecutive_trades': risks_indicators.get('max_consecutive_trades', [0, 0]),
@@ -220,7 +526,12 @@ class MT5MongoDB:
                 'min_avg_mae': risks_mfe_mae_money.get('min_avg_mae', 0),
                 'period': risks_mfe_mae_money.get('period', 0),
                 'chart': risks_mfe_mae_money.get('chart', [])
-            }
+            },
+            # Evaluation-related fields (kept within credentials_reports)
+            'status': evaluation['status'],
+            'isBreached': evaluation['isBreached'],
+            'breachReasons': evaluation['breachReasons'],
+            'evaluation': evaluation
         }
         
         return document
@@ -235,7 +546,11 @@ class MT5MongoDB:
         Returns:
             The inserted/updated document ID
         """
-        document = self.transform_mt5_data(parsed_data)
+        # Derive credential key from credentialkeys collection using loginId/account
+        account_number = parsed_data.get('account', {}).get('account') or parsed_data.get('account')
+        credential_key = self._find_credential_key(account_number)
+
+        document = self.transform_mt5_data(parsed_data, credential_key)
         account_number = document['account']
         
         try:
@@ -340,8 +655,14 @@ class MT5MongoDB:
         try:
             from datetime import datetime
             
-            # Build the query
-            query = {"credentials.loginId": str(login_id)}
+            # Build the query (handle numeric or string loginId) and match array element
+            login_variants = [str(login_id)]
+            try:
+                login_variants.append(int(login_id))
+            except Exception:
+                pass
+
+            query = {"credentials": {"$elemMatch": {"loginId": {"$in": login_variants}}}}
             if key:
                 query["key"] = key
             

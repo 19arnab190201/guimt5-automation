@@ -39,11 +39,7 @@ def launch_mt5():
         print("Existing MT5 detected - closing.")
         close_mt5()
 
-    print("11111111111")
-    print("[MT5_PATH]", [MT5_PATH], subprocess.Popen([MT5_PATH]))
-
     subprocess.Popen([MT5_PATH])
-    print("11111111111")
 
     time.sleep(8)
     print("MT5 launched.")
@@ -54,8 +50,6 @@ def login_to_mt5(login, password, server):
     print(f"Logging into MT5 with account {login}...")
     pyautogui.hotkey('alt', 'f')
     time.sleep(1)
-    pyautogui.press('l')
-    time.sleep(2)
 
     # Login ID
     pyautogui.hotkey('ctrl', 'a')

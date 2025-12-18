@@ -33,6 +33,14 @@ def close_mt5():
             time.sleep(2)
 
 
+def focus_mt5_window():
+    """Click on top-left of screen to ensure MT5 window is in focus"""
+    # Click on top-left area of the screen (title bar region)
+    # MT5 typically opens maximized or at top-left
+    pyautogui.click(100, 15)
+    print("Clicked on title bar to focus MT5 window")
+
+
 def launch_mt5():
     print("Launching MT5...")
     if is_mt5_running():
@@ -42,7 +50,12 @@ def launch_mt5():
     subprocess.Popen([MT5_PATH])
 
     time.sleep(8)
-    print("MT5 launched.")
+    
+    # Focus the MT5 window by clicking on title bar
+    focus_mt5_window()
+    time.sleep(1)
+    
+    print("MT5 launched and focused.")
 
 
 def login_to_mt5(login, password, server):

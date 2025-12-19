@@ -121,31 +121,329 @@ class MT5MongoDB:
             return "2_STEP_PHASE_2"
         return "2_STEP_PHASE_1"
 
-    def _daily_start_values(self, balance_chart):
+    def _group_chart_by_day(self, balance_chart):
         """
-        Get starting balance/equity for the current UTC day from chart series.
-        Returns tuple (balance, equity, higher_value, latest_equity, latest_ts)
+        Group balance chart points by UTC date.
+        Returns dict: {date: [list of points sorted by timestamp]}
+        Each point has: {'timestamp': datetime, 'balance': float, 'equity': float}
         """
-        if not balance_chart:
-            return None, None, None, None, None
-
-        # Use latest point to determine the day
-        latest_point = balance_chart[-1]
-        latest_ts = datetime.fromtimestamp(latest_point.get("x", 0), tz=timezone.utc)
-        latest_equity = latest_point.get("y", [0, 0])[1] if isinstance(latest_point.get("y"), list) else None
-
-        start_balance = latest_point.get("y", [0, 0])[0]
-        start_equity = latest_point.get("y", [0, 0])[1]
-
+        daily_data = {}
+        
         for point in balance_chart:
             ts = datetime.fromtimestamp(point.get("x", 0), tz=timezone.utc)
-            if ts.date() == latest_ts.date():
-                start_balance = point.get("y", [0, 0])[0]
-                start_equity = point.get("y", [0, 0])[1]
-                break
+            y_vals = point.get("y", [0, 0])
+            
+            if not isinstance(y_vals, list) or len(y_vals) < 2:
+                continue
+                
+            day_key = ts.date()
+            if day_key not in daily_data:
+                daily_data[day_key] = []
+            
+            daily_data[day_key].append({
+                'timestamp': ts,
+                'balance': float(y_vals[0] or 0),
+                'equity': float(y_vals[1] or 0)
+            })
+        
+        # Sort each day's points by timestamp
+        for day_key in daily_data:
+            daily_data[day_key].sort(key=lambda x: x['timestamp'])
+        
+        return daily_data
 
-        higher_value = max(start_balance or 0, start_equity or 0)
-        return start_balance, start_equity, higher_value, latest_equity, latest_ts
+    def _check_daily_loss_limit(self, balance_chart, daily_loss_limit, initial_balance=None):
+        """
+        Check for Daily Loss Limit breach across ALL days in the account history.
+        
+        Daily Loss Limit Rule:
+        - Reference: The HIGHER of (start-of-day balance, start-of-day equity)
+        - Start-of-day = Previous day's closing values OR first data point for day 1
+        - Breach: If at ANY point during ANY day, equity/balance drops below:
+                  reference_value * (1 - daily_loss_limit)
+        
+        Returns: (is_breached, details_dict)
+        """
+        if not balance_chart:
+            return False, {}
+        
+        daily_data = self._group_chart_by_day(balance_chart)
+        
+        if not daily_data:
+            return False, {}
+        
+        sorted_dates = sorted(daily_data.keys())
+        
+        # Track worst breach across all days
+        worst_breach = None
+        worst_breach_date = None
+        worst_breach_details = {}
+        
+        # Track previous day's closing values for next day's reference
+        prev_day_close_balance = None
+        prev_day_close_equity = None
+        
+        for i, day_date in enumerate(sorted_dates):
+            day_points = daily_data[day_date]
+            
+            if not day_points:
+                continue
+            
+            # Determine start-of-day reference value
+            if i == 0:
+                # First day: use initial balance if provided, else first data point
+                if initial_balance and initial_balance > 0:
+                    start_balance = initial_balance
+                    start_equity = initial_balance  # Assume equity = balance at start
+                else:
+                    start_balance = day_points[0]['balance']
+                    start_equity = day_points[0]['equity']
+            else:
+                # Use previous day's closing values
+                start_balance = prev_day_close_balance if prev_day_close_balance else day_points[0]['balance']
+                start_equity = prev_day_close_equity if prev_day_close_equity else day_points[0]['equity']
+            
+            # Reference is the HIGHER of start balance or equity
+            reference_value = max(start_balance, start_equity)
+            
+            # Skip if reference is invalid
+            if reference_value <= 0:
+                prev_day_close_balance = day_points[-1]['balance']
+                prev_day_close_equity = day_points[-1]['equity']
+                continue
+            
+            # Calculate threshold (minimum allowed value)
+            threshold = reference_value * (1 - daily_loss_limit)
+            
+            # Find minimum equity and balance during this day
+            min_equity = min(p['equity'] for p in day_points)
+            min_balance = min(p['balance'] for p in day_points)
+            worst_value = min(min_equity, min_balance)
+            
+            # Check for breach
+            if worst_value < threshold:
+                breach_amount = threshold - worst_value
+                breach_percent = breach_amount / reference_value if reference_value > 0 else 0
+                
+                # Track if this is the worst breach
+                if worst_breach is None or breach_amount > worst_breach:
+                    worst_breach = breach_amount
+                    worst_breach_date = day_date
+                    worst_breach_details = {
+                        'breach_date': str(day_date),
+                        'start_balance': start_balance,
+                        'start_equity': start_equity,
+                        'reference_value': reference_value,
+                        'threshold': threshold,
+                        'worst_value': worst_value,
+                        'breach_amount': breach_amount,
+                        'breach_percent': breach_percent,
+                    }
+            
+            # Update previous day close for next iteration
+            prev_day_close_balance = day_points[-1]['balance']
+            prev_day_close_equity = day_points[-1]['equity']
+        
+        # Get current day details for metrics
+        current_day = sorted_dates[-1] if sorted_dates else None
+        current_day_points = daily_data.get(current_day, [])
+        
+        details = {
+            'total_days_checked': len(sorted_dates),
+            'current_day': str(current_day) if current_day else None,
+        }
+        
+        if current_day_points:
+            # Current day reference (for display)
+            if len(sorted_dates) > 1:
+                prev_day = sorted_dates[-2]
+                prev_points = daily_data.get(prev_day, [])
+                if prev_points:
+                    curr_start_bal = prev_points[-1]['balance']
+                    curr_start_eq = prev_points[-1]['equity']
+                else:
+                    curr_start_bal = current_day_points[0]['balance']
+                    curr_start_eq = current_day_points[0]['equity']
+            else:
+                curr_start_bal = initial_balance if initial_balance else current_day_points[0]['balance']
+                curr_start_eq = initial_balance if initial_balance else current_day_points[0]['equity']
+            
+            curr_reference = max(curr_start_bal, curr_start_eq)
+            curr_threshold = curr_reference * (1 - daily_loss_limit) if curr_reference > 0 else 0
+            
+            details.update({
+                'current_start_balance': curr_start_bal,
+                'current_start_equity': curr_start_eq,
+                'current_reference_value': curr_reference,
+                'current_threshold': curr_threshold,
+                'current_equity': current_day_points[-1]['equity'],
+                'current_balance': current_day_points[-1]['balance'],
+                'current_min_equity': min(p['equity'] for p in current_day_points),
+                'current_min_balance': min(p['balance'] for p in current_day_points),
+            })
+        
+        is_breached = worst_breach is not None
+        
+        if is_breached:
+            details.update(worst_breach_details)
+        
+        return is_breached, details
+
+    def _check_daily_drawdown(self, balance_chart, daily_loss_limit, initial_balance=None):
+        """
+        Check for Daily Drawdown breach across ALL days in the account history.
+        
+        Daily Drawdown Rule:
+        - Tracks the HIGHEST equity reached during each day (rolling high watermark)
+        - Starting peak = higher of (start-of-day balance, start-of-day equity)
+        - Breach: If at ANY point, equity drops more than daily_loss_limit % from the 
+                  current peak (high watermark)
+        
+        Example: Start of day equity = $100,000, rises to $102,000
+                 With 4% limit, equity cannot drop below $97,920 ($102,000 * 0.96)
+        
+        Returns: (is_breached, details_dict)
+        """
+        if not balance_chart:
+            return False, {}
+        
+        daily_data = self._group_chart_by_day(balance_chart)
+        
+        if not daily_data:
+            return False, {}
+        
+        sorted_dates = sorted(daily_data.keys())
+        
+        # Track worst breach across all days
+        worst_breach = None
+        worst_breach_date = None
+        worst_breach_details = {}
+        
+        # Track previous day's closing values
+        prev_day_close_balance = None
+        prev_day_close_equity = None
+        
+        for i, day_date in enumerate(sorted_dates):
+            day_points = daily_data[day_date]
+            
+            if not day_points:
+                continue
+            
+            # Determine start-of-day values for initial peak
+            if i == 0:
+                if initial_balance and initial_balance > 0:
+                    start_balance = initial_balance
+                    start_equity = initial_balance
+                else:
+                    start_balance = day_points[0]['balance']
+                    start_equity = day_points[0]['equity']
+            else:
+                start_balance = prev_day_close_balance if prev_day_close_balance else day_points[0]['balance']
+                start_equity = prev_day_close_equity if prev_day_close_equity else day_points[0]['equity']
+            
+            # Initial peak is the higher of start balance/equity
+            peak_equity = max(start_balance, start_equity)
+            
+            if peak_equity <= 0:
+                prev_day_close_balance = day_points[-1]['balance']
+                prev_day_close_equity = day_points[-1]['equity']
+                continue
+            
+            # Check each point during the day
+            day_breached = False
+            breach_point = None
+            max_drawdown_pct = 0
+            
+            for point in day_points:
+                equity = point['equity']
+                
+                # Update peak (high watermark) - only goes UP
+                if equity > peak_equity:
+                    peak_equity = equity
+                
+                # Calculate current threshold from peak
+                threshold = peak_equity * (1 - daily_loss_limit)
+                
+                # Check for breach
+                if equity < threshold and not day_breached:
+                    day_breached = True
+                    breach_point = {
+                        'equity_at_breach': equity,
+                        'peak_at_breach': peak_equity,
+                        'threshold_at_breach': threshold,
+                        'timestamp': point['timestamp'],
+                    }
+                
+                # Track max drawdown percentage
+                if peak_equity > 0:
+                    drawdown_pct = (peak_equity - equity) / peak_equity
+                    if drawdown_pct > max_drawdown_pct:
+                        max_drawdown_pct = drawdown_pct
+            
+            if day_breached and breach_point:
+                breach_amount = breach_point['threshold_at_breach'] - breach_point['equity_at_breach']
+                
+                if worst_breach is None or breach_amount > worst_breach:
+                    worst_breach = breach_amount
+                    worst_breach_date = day_date
+                    worst_breach_details = {
+                        'breach_date': str(day_date),
+                        'peak_equity': breach_point['peak_at_breach'],
+                        'threshold': breach_point['threshold_at_breach'],
+                        'equity_at_breach': breach_point['equity_at_breach'],
+                        'breach_amount': breach_amount,
+                        'max_drawdown_percent': max_drawdown_pct,
+                    }
+            
+            # Update previous day close
+            prev_day_close_balance = day_points[-1]['balance']
+            prev_day_close_equity = day_points[-1]['equity']
+        
+        # Get current day details
+        current_day = sorted_dates[-1] if sorted_dates else None
+        current_day_points = daily_data.get(current_day, [])
+        
+        details = {
+            'total_days_checked': len(sorted_dates),
+            'current_day': str(current_day) if current_day else None,
+            'allowed_drawdown_percent': daily_loss_limit,
+        }
+        
+        if current_day_points:
+            # Calculate current day's peak
+            if len(sorted_dates) > 1:
+                prev_day = sorted_dates[-2]
+                prev_points = daily_data.get(prev_day, [])
+                if prev_points:
+                    curr_start_val = max(prev_points[-1]['balance'], prev_points[-1]['equity'])
+                else:
+                    curr_start_val = max(current_day_points[0]['balance'], current_day_points[0]['equity'])
+            else:
+                curr_start_val = initial_balance if initial_balance else max(
+                    current_day_points[0]['balance'], current_day_points[0]['equity']
+                )
+            
+            curr_peak = curr_start_val
+            for p in current_day_points:
+                if p['equity'] > curr_peak:
+                    curr_peak = p['equity']
+            
+            curr_threshold = curr_peak * (1 - daily_loss_limit) if curr_peak > 0 else 0
+            curr_drawdown = (curr_peak - current_day_points[-1]['equity']) / curr_peak if curr_peak > 0 else 0
+            
+            details.update({
+                'current_peak_equity': curr_peak,
+                'current_threshold': curr_threshold,
+                'current_equity': current_day_points[-1]['equity'],
+                'current_drawdown_percent': curr_drawdown,
+            })
+        
+        is_breached = worst_breach is not None
+        
+        if is_breached:
+            details.update(worst_breach_details)
+        
+        return is_breached, details
 
     def _count_profitable_days(self, profit_daily_chart, initial_balance):
         """
@@ -253,26 +551,49 @@ class MT5MongoDB:
                     }
                 )
 
-        # Daily loss limit check (critical)
-        (
-            day_start_balance,
-            day_start_equity,
-            higher_value,
-            latest_equity,
-            latest_ts,
-        ) = self._daily_start_values(balance_chart)
-        if higher_value is not None and latest_equity is not None:
-            daily_threshold = higher_value * (1 - rules["daily_loss_limit"])
-            if latest_equity < daily_threshold:
-                breaches.append(
-                    {
-                        "rule": "DAILY_LOSS_LIMIT",
-                        "severity": "critical",
-                        "observed": latest_equity,
-                        "threshold": daily_threshold,
-                        "message": "Current equity dropped below daily loss limit.",
-                    }
-                )
+        # Daily Loss Limit check (critical)
+        # Checks ALL days: if equity dropped below threshold from higher of (start-of-day balance, start-of-day equity)
+        daily_loss_breached, daily_loss_details = self._check_daily_loss_limit(
+            balance_chart, rules["daily_loss_limit"], initial_balance
+        )
+        if daily_loss_breached:
+            breach_date = daily_loss_details.get("breach_date", "unknown")
+            ref_val = daily_loss_details.get("reference_value", 0)
+            thresh = daily_loss_details.get("threshold", 0)
+            worst = daily_loss_details.get("worst_value", 0)
+            breaches.append(
+                {
+                    "rule": "DAILY_LOSS_LIMIT",
+                    "severity": "critical",
+                    "breach_date": breach_date,
+                    "observed": worst,
+                    "threshold": thresh,
+                    "reference_value": ref_val,
+                    "message": f"Daily loss limit breached on {breach_date}. Reference: ${ref_val:,.2f}, Threshold: ${thresh:,.2f}, Dropped to: ${worst:,.2f}",
+                }
+            )
+
+        # Daily Drawdown check (critical)
+        # Checks ALL days: if equity dropped more than allowed % from the PEAK equity reached during each day
+        daily_dd_breached, daily_dd_details = self._check_daily_drawdown(
+            balance_chart, rules["daily_loss_limit"], initial_balance
+        )
+        if daily_dd_breached:
+            breach_date = daily_dd_details.get("breach_date", "unknown")
+            peak = daily_dd_details.get("peak_equity", 0)
+            thresh = daily_dd_details.get("threshold", 0)
+            breach_eq = daily_dd_details.get("equity_at_breach", 0)
+            breaches.append(
+                {
+                    "rule": "DAILY_DRAWDOWN",
+                    "severity": "critical",
+                    "breach_date": breach_date,
+                    "observed": breach_eq,
+                    "threshold": thresh,
+                    "peak_equity": peak,
+                    "message": f"Daily drawdown breached on {breach_date}. Peak: ${peak:,.2f}, Threshold: ${thresh:,.2f}, Dropped to: ${breach_eq:,.2f}",
+                }
+            )
 
         # Inactivity breach check (critical) - consecutive days with no equity change
         inactivity_breached, consecutive_inactive_days = self._check_inactivity_breach(
@@ -329,9 +650,23 @@ class MT5MongoDB:
                 "profit_target_hit": profit_target_hit,
                 "profitable_days": profitable_days,
                 "consecutive_inactive_days": consecutive_inactive_days,
-                "daily_start_balance": day_start_balance,
-                "daily_start_equity": day_start_equity,
-                "latest_equity": latest_equity,
+                # Daily Loss Limit metrics (current day)
+                "daily_loss_total_days_checked": daily_loss_details.get("total_days_checked"),
+                "daily_loss_start_balance": daily_loss_details.get("current_start_balance"),
+                "daily_loss_start_equity": daily_loss_details.get("current_start_equity"),
+                "daily_loss_reference_value": daily_loss_details.get("current_reference_value"),
+                "daily_loss_threshold": daily_loss_details.get("current_threshold"),
+                "daily_loss_current_equity": daily_loss_details.get("current_equity"),
+                "daily_loss_min_equity_today": daily_loss_details.get("current_min_equity"),
+                "daily_loss_breached": daily_loss_breached,
+                "daily_loss_breach_date": daily_loss_details.get("breach_date") if daily_loss_breached else None,
+                # Daily Drawdown metrics (current day)
+                "daily_dd_total_days_checked": daily_dd_details.get("total_days_checked"),
+                "daily_dd_peak_equity": daily_dd_details.get("current_peak_equity"),
+                "daily_dd_threshold": daily_dd_details.get("current_threshold"),
+                "daily_dd_current_drawdown_pct": daily_dd_details.get("current_drawdown_percent"),
+                "daily_dd_breached": daily_dd_breached,
+                "daily_dd_breach_date": daily_dd_details.get("breach_date") if daily_dd_breached else None,
             },
         }
 

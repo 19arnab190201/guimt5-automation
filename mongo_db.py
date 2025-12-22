@@ -932,7 +932,14 @@ class MT5MongoDB:
     
     def get_active_credentials(self, server_name="Exness-MT5Trial8"):
         """
-        Fetch all active credentials from the credentials collection
+        Fetch credentials that need to be checked from the credentials collection.
+        
+        Logic:
+        - isActive: false means credential is ASSIGNED and needs to be checked
+        - isActive: true means credential is NOT assigned yet (skip)
+        - After filtering assigned credentials, check credentials_reports collection
+        - Skip credentials that already have status "BREACHED"
+        - Only return credentials with status "ACTIVE" or no status (new accounts)
         
         Args:
             server_name: MT5 server name to use for all accounts
@@ -945,31 +952,62 @@ class MT5MongoDB:
             credential_docs = list(self.credentials_collection.find())
             
             active_accounts = []
+            skipped_breached = 0
+            skipped_unassigned = 0
             
             for doc in credential_docs:
                 key = doc.get('key', 'Unknown')
                 credentials = doc.get('credentials', [])
                 
-                # Filter for active and non-breached credentials only
                 for cred in credentials:
                     is_active = cred.get('isActive', False)
-                    # Default to False if isBreached field doesn't exist
-                    # Only considered breached if explicitly set to True
-                    is_breached = cred.get('isBreached', False)
+                    login_id = cred.get('loginId')
                     
-                    # Only process if active AND not breached
-                    if is_active and not is_breached:
-                        account = {
-                            'login': int(cred['loginId']),
-                            'password': cred['password'],
-                            'server': server_name,
-                            'key': key,  # Store the key for reference
-                            'assignedTo': cred.get('assignedTo'),
-                            'assignedOrderId': cred.get('assignedOrderId')
-                        }
-                        active_accounts.append(account)
+                    # Only process ASSIGNED credentials (isActive: false)
+                    if is_active:
+                        skipped_unassigned += 1
+                        continue
+                    
+                    # Credential is assigned, check if it's already breached in reports
+                    try:
+                        # Convert loginId to int for lookup
+                        account_number = int(login_id) if login_id else None
+                        
+                        if account_number:
+                            # Check credentials_reports collection for existing status
+                            report = self.collection.find_one({'account': account_number})
+                            
+                            if report:
+                                status = report.get('status', '')
+                                # Skip if already breached
+                                if status == self.STATUS_BREACHED:
+                                    skipped_breached += 1
+                                    continue
+                                # Only include if status is ACTIVE
+                                if status != self.STATUS_ACTIVE:
+                                    continue
+                            
+                            # Account is either new (no report) or has ACTIVE status
+                            account = {
+                                'login': account_number,
+                                'password': cred['password'],
+                                'server': server_name,
+                                'key': key,  # Store the key for reference
+                                'assignedTo': cred.get('assignedTo'),
+                                'assignedOrderId': cred.get('assignedOrderId'),
+                                'assignedAt': cred.get('assignedAt')
+                            }
+                            active_accounts.append(account)
+                    except (ValueError, TypeError) as e:
+                        print(f"Warning: Invalid loginId '{login_id}' for key '{key}': {e}")
+                        continue
+                    except Exception as e:
+                        print(f"Warning: Error checking report for loginId '{login_id}': {e}")
+                        continue
             
-            print(f"Found {len(active_accounts)} active credentials in MongoDB")
+            print(f"Found {len(active_accounts)} credentials that need checking")
+            print(f"  - Skipped {skipped_unassigned} unassigned credentials (isActive: true)")
+            print(f"  - Skipped {skipped_breached} already breached credentials")
             return active_accounts
             
         except Exception as e:

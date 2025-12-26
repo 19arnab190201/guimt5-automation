@@ -152,6 +152,54 @@ class MT5MongoDB:
         
         return daily_data
 
+    def _get_midnight_utc_value(self, day_date, day_points, daily_data):
+        """
+        Get the max(balance, equity) at 00:00 UTC for a given day.
+        Uses the latest max(balance, equity) value at or before 00:00 UTC.
+        
+        Strategy:
+        1. Check if there's a point exactly at 00:00 UTC in the current day
+        2. Check previous day's last point (closest to midnight of current day)
+        3. Fallback to first point of current day
+        
+        Args:
+            day_date: date object for the day
+            day_points: list of points for that day (all after 00:00 UTC)
+            daily_data: full daily_data dict (to check previous day if needed)
+            
+        Returns:
+            float: max(balance, equity) at 00:00 UTC, or None if no data available
+        """
+        # Target midnight UTC for this day
+        midnight_utc = datetime.combine(day_date, datetime.min.time(), tzinfo=timezone.utc)
+        # Small tolerance for points exactly at midnight (within 1 second)
+        midnight_tolerance = timedelta(seconds=1)
+        
+        # First, check if there's a point exactly at 00:00 UTC (or very close) in current day
+        for point in day_points:
+            time_diff = abs((point['timestamp'] - midnight_utc).total_seconds())
+            if time_diff <= midnight_tolerance.total_seconds():
+                # Found a point at or very close to midnight UTC
+                return max(point['balance'], point['equity'])
+        
+        # If no point at midnight, check previous day's last point
+        # This represents the value going into the current day at 00:00 UTC
+        prev_date = day_date - timedelta(days=1)
+        if prev_date in daily_data:
+            prev_points = daily_data[prev_date]
+            if prev_points:
+                # Use the last point from previous day
+                # This should be the closest value to midnight UTC of current day
+                last_point = prev_points[-1]
+                return max(last_point['balance'], last_point['equity'])
+        
+        # Fallback: use first point of the current day if available
+        # (This represents the earliest known value after midnight UTC)
+        if day_points:
+            return max(day_points[0]['balance'], day_points[0]['equity'])
+        
+        return None
+
     def _check_daily_loss_limit(self, balance_chart, daily_loss_limit, initial_balance=None):
         """
         Check for Daily Loss Limit breach across ALL days in the account history.
@@ -294,12 +342,14 @@ class MT5MongoDB:
         Check for Daily Drawdown breach across ALL days in the account history.
         
         Daily Drawdown Rule:
+        - Starting peak = max(balance, equity) at 00:00 UTC for each day
+        - Uses the latest max(balance, equity) value at or before 00:00 UTC
         - Tracks the HIGHEST equity reached during each day (rolling high watermark)
-        - Starting peak = higher of (start-of-day balance, start-of-day equity)
+        - Starting peak is updated upward if equity exceeds it during the day
         - Breach: If at ANY point, equity drops more than daily_loss_limit % from the 
                   current peak (high watermark)
         
-        Example: Start of day equity = $100,000, rises to $102,000
+        Example: At 00:00 UTC, max(balance, equity) = $100,000, rises to $102,000
                  With 4% limit, equity cannot drop below $97,920 ($102,000 * 0.96)
         
         Returns: (is_breached, details_dict)
@@ -319,34 +369,30 @@ class MT5MongoDB:
         worst_breach_date = None
         worst_breach_details = {}
         
-        # Track previous day's closing values
-        prev_day_close_balance = None
-        prev_day_close_equity = None
-        
         for i, day_date in enumerate(sorted_dates):
             day_points = daily_data[day_date]
             
             if not day_points:
                 continue
             
-            # Determine start-of-day values for initial peak
-            if i == 0:
-                if initial_balance and initial_balance > 0:
-                    start_balance = initial_balance
-                    start_equity = initial_balance
-                else:
-                    start_balance = day_points[0]['balance']
-                    start_equity = day_points[0]['equity']
-            else:
-                start_balance = prev_day_close_balance if prev_day_close_balance else day_points[0]['balance']
-                start_equity = prev_day_close_equity if prev_day_close_equity else day_points[0]['equity']
+            # Get the value at 00:00 UTC for this day
+            # This is the latest max(balance, equity) at 0:00 UTC
+            midnight_value = self._get_midnight_utc_value(day_date, day_points, daily_data)
             
-            # Initial peak is the higher of start balance/equity
-            peak_equity = max(start_balance, start_equity)
+            # For the first day, use initial_balance if provided
+            if i == 0 and initial_balance and initial_balance > 0:
+                if midnight_value is not None:
+                    # Use the higher of initial_balance and midnight value
+                    peak_equity = max(initial_balance, midnight_value)
+                else:
+                    peak_equity = initial_balance
+            elif midnight_value is not None:
+                peak_equity = midnight_value
+            else:
+                # Fallback if no midnight value available
+                peak_equity = max(day_points[0]['balance'], day_points[0]['equity'])
             
             if peak_equity <= 0:
-                prev_day_close_balance = day_points[-1]['balance']
-                prev_day_close_equity = day_points[-1]['equity']
                 continue
             
             # Check each point during the day
@@ -394,10 +440,6 @@ class MT5MongoDB:
                         'breach_amount': breach_amount,
                         'max_drawdown_percent': max_drawdown_pct,
                     }
-            
-            # Update previous day close
-            prev_day_close_balance = day_points[-1]['balance']
-            prev_day_close_equity = day_points[-1]['equity']
         
         # Get current day details
         current_day = sorted_dates[-1] if sorted_dates else None
@@ -410,20 +452,21 @@ class MT5MongoDB:
         }
         
         if current_day_points:
-            # Calculate current day's peak
-            if len(sorted_dates) > 1:
-                prev_day = sorted_dates[-2]
-                prev_points = daily_data.get(prev_day, [])
-                if prev_points:
-                    curr_start_val = max(prev_points[-1]['balance'], prev_points[-1]['equity'])
-                else:
-                    curr_start_val = max(current_day_points[0]['balance'], current_day_points[0]['equity'])
-            else:
-                curr_start_val = initial_balance if initial_balance else max(
-                    current_day_points[0]['balance'], current_day_points[0]['equity']
-                )
+            # Calculate current day's peak using midnight UTC value
+            curr_start_val = self._get_midnight_utc_value(current_day, current_day_points, daily_data)
             
-            curr_peak = curr_start_val
+            # For first day, use initial_balance if provided
+            if len(sorted_dates) == 1 and initial_balance and initial_balance > 0:
+                if curr_start_val is not None:
+                    curr_peak = max(initial_balance, curr_start_val)
+                else:
+                    curr_peak = initial_balance
+            elif curr_start_val is not None:
+                curr_peak = curr_start_val
+            else:
+                curr_peak = max(current_day_points[0]['balance'], current_day_points[0]['equity'])
+            
+            # Update peak with highest equity during the day
             for p in current_day_points:
                 if p['equity'] > curr_peak:
                     curr_peak = p['equity']

@@ -59,30 +59,40 @@ def launch_mt5():
 
 
 def login_to_mt5(login, password, server):
-    pyautogui.hotkey('shift', 'tab')
-    print(f"Logging into MT5 with account {login}...")
-    pyautogui.hotkey('alt', 'f')
-    time.sleep(1)
+    # Temporarily reduce pause for faster input
+    original_pause = pyautogui.PAUSE
+    pyautogui.PAUSE = 0.1  # Much faster for input operations
+    
+    try:
+        pyautogui.hotkey('shift', 'tab')
+        print(f"Logging into MT5 with account {login}...")
+        pyautogui.hotkey('alt', 'f')
+        time.sleep(0.3)  # Reduced from 1 second
 
-    # Login ID
-    pyautogui.hotkey('ctrl', 'a')
-    pyautogui.press('delete')
-    pyautogui.write(str(login), interval=0.1)
-    pyautogui.press('tab')
+        # Login ID - faster typing
+        pyautogui.hotkey('ctrl', 'a')
+        pyautogui.press('delete')
+        pyautogui.write(str(login), interval=0.01)  # Much faster typing
+        pyautogui.press('tab')
+        time.sleep(0.1)  # Small delay for field to process
 
-    # Password
-    pyautogui.hotkey('ctrl', 'a')
-    pyautogui.press('delete')
-    pyautogui.write(password, interval=0.1)
-    pyautogui.press('tab')
+        # Password - faster typing
+        pyautogui.hotkey('ctrl', 'a')
+        pyautogui.press('delete')
+        pyautogui.write(password, interval=0.01)  # Much faster typing
+        pyautogui.press('tab')
+        time.sleep(0.1)  # Small delay for field to process
 
-    # Server
-    pyautogui.hotkey('ctrl', 'a')
-    pyautogui.press('delete')
-    pyautogui.write(server, interval=0.1)
-    pyautogui.press('enter')
-    time.sleep(6)
-    print("Login complete.")
+        # Server - faster typing
+        pyautogui.hotkey('ctrl', 'a')
+        pyautogui.press('delete')
+        pyautogui.write(server, interval=0.01)  # Much faster typing
+        pyautogui.press('enter')
+        time.sleep(3)  # Reduced from 6 seconds - enough for login to process
+        print("Login complete.")
+    finally:
+        # Restore original pause setting
+        pyautogui.PAUSE = original_pause
 
 
 def generate_report():

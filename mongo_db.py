@@ -99,26 +99,61 @@ class MT5MongoDB:
             pass
         return None
 
-    def _infer_program(self, account_name: str, credential_key: str = None):
+    def _find_credential_phase(self, account_number):
+        """Lookup the phase from credentialkeys collection for a given login."""
+        if account_number is None:
+            return None
+        try:
+            variants = [str(account_number)]
+            try:
+                variants.append(int(account_number))
+            except Exception:
+                pass
+
+            doc = self.credentials_collection.find_one(
+                {"credentials": {"$elemMatch": {"loginId": {"$in": variants}}}},
+                {"credentials.$": 1}
+            )
+            if doc and doc.get("credentials") and len(doc["credentials"]) > 0:
+                return doc["credentials"][0].get("phase", "PHASE_1")
+        except Exception:
+            pass
+        return "PHASE_1"
+
+    def _infer_program(self, account_name: str, credential_key: str = None, credential_phase: str = None):
         """
-        Infer challenge program from account name.
+        Infer challenge program from credential key and phase.
+        
+        Rules:
+        - 1 Step challenges use "1_STEP" rule set (single phase)
+        - 2 Step challenges use:
+          - "2_STEP_PHASE_1" for Phase 1 (Examinee Phase)
+          - "2_STEP_PHASE_2" for Phase 2 (Scholar Phase)
+        
         Fallback priority:
-        1) credential key suffix (e.g., 1STEP/2STEP)
+        1) credential key suffix (e.g., 1STEP/2STEP) + phase
         2) name keywords
         3) default to 2_STEP_PHASE_1
         """
         if credential_key:
             key_upper = credential_key.upper()
             if "1STEP" in key_upper:
+                # 1 Step challenges only have one phase (Scholar Phase)
                 return "1_STEP"
             if "2STEP" in key_upper:
+                # 2 Step challenges have two phases
+                # Check the phase from credentials
+                if credential_phase == "PHASE_2":
+                    return "2_STEP_PHASE_2"
                 return "2_STEP_PHASE_1"
 
         lowered = (account_name or "").lower()
         if "1 step" in lowered or "one step" in lowered:
             return "1_STEP"
-        if "phase 2" in lowered or "step 2" in lowered or "phase two" in lowered:
+        if "phase 2" in lowered or "scholar phase" in lowered:
             return "2_STEP_PHASE_2"
+        if "phase 1" in lowered or "examinee" in lowered:
+            return "2_STEP_PHASE_1"
         return "2_STEP_PHASE_1"
 
     def _group_chart_by_day(self, balance_chart):
@@ -385,7 +420,7 @@ class MT5MongoDB:
         is_breached = max_consecutive > max_inactivity_days
         return is_breached, max_consecutive
 
-    def _evaluate_account(self, parsed_data, credential_key=None):
+    def _evaluate_account(self, parsed_data, credential_key=None, credential_phase=None):
         """Apply breach rules and return evaluation metadata."""
         now = datetime.utcnow().replace(tzinfo=timezone.utc)
         account_info = parsed_data.get("account", {})
@@ -394,7 +429,13 @@ class MT5MongoDB:
         summary_indicators = parsed_data.get("summaryIndicators", {})
 
         account_name = account_info.get("name", "") or ""
-        program = self._infer_program(account_name, credential_key)
+        
+        # Get the phase from credentials if not provided
+        if credential_phase is None:
+            account_number = account_info.get("account")
+            credential_phase = self._find_credential_phase(account_number)
+        
+        program = self._infer_program(account_name, credential_key, credential_phase)
         rules = self.RULES[program]
 
         initial_balance = float(summary.get("deposit", [0, 0])[0] or 0)

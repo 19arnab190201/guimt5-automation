@@ -37,11 +37,11 @@ MONGODB_DATABASE = os.getenv('MONGODB_DATABASE', 'test')
 MT5_PATH = r"C:\Program Files\MetaTrader 5\terminal64.exe"
 
 # Folder where MT5 saves reports initially
-DOWNLOAD_FOLDER = r"C:\Users\arnab\Desktop\report_automation"
-# DOWNLOAD_FOLDER = r"C:\Users\Administrator\Desktop\report_automation"
+# DOWNLOAD_FOLDER = r"C:\Users\arnab\Desktop\report_automation"
+DOWNLOAD_FOLDER = r"C:\Users\Administrator\Desktop\report_automation"
 # Folder to organize saved reports
-REPORT_SAVE_PATH = r"C:\Users\arnab\Desktop\report_automation"
-# REPORT_SAVE_PATH = r"C:\Users\Administrator\Desktop\report_automation"
+# REPORT_SAVE_PATH = r"C:\Users\arnab\Desktop\report_automation"
+REPORT_SAVE_PATH = r"C:\Users\Administrator\Desktop\report_automation"
 # C:\Users\Administrator\Desktop\report_automation
 
 # ================= OTHER SETTINGS =================

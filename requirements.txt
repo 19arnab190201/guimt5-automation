@@ -10,6 +10,5 @@ pandas==2.3.3
 # MongoDB
 pymongo==4.11.2
 
-# MetaTrader 5
-MetaTrader5==5.0.5388
+
 

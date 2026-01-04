@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 import psutil
 import config
+import logging
 
 # Import configuration
 MT5_PATH = config.MT5_PATH
@@ -33,18 +34,24 @@ def close_mt5():
             time.sleep(2)
 
 
+def get_logger():
+    """Get the logger instance"""
+    return logging.getLogger('MT5Automation')
+
+
 def focus_mt5_window():
     """Click on top-left of screen to ensure MT5 window is in focus"""
     # Click on top-left area of the screen (title bar region)
     # MT5 typically opens maximized or at top-left
     pyautogui.click(100, 15)
-    print("Clicked on title bar to focus MT5 window")
+    get_logger().info("Clicked on title bar to focus MT5 window")
 
 
 def launch_mt5():
-    print("Launching MT5...")
+    logger = get_logger()
+    logger.info("Launching MT5...")
     if is_mt5_running():
-        print("Existing MT5 detected - closing.")
+        logger.info("Existing MT5 detected - closing.")
         close_mt5()
 
     subprocess.Popen([MT5_PATH])
@@ -55,17 +62,18 @@ def launch_mt5():
     focus_mt5_window()
     time.sleep(1)
     
-    print("MT5 launched and focused.")
+    logger.info("MT5 launched and focused.")
 
 
 def login_to_mt5(login, password, server):
+    logger = get_logger()
     # Temporarily reduce pause for faster input
     original_pause = pyautogui.PAUSE
     pyautogui.PAUSE = 0.1  # Much faster for input operations
     
     try:
         pyautogui.hotkey('shift', 'tab')
-        print(f"Logging into MT5 with account {login}...")
+        logger.info(f"Logging into MT5 with account {login}...")
         pyautogui.hotkey('alt', 'f')
         time.sleep(0.3)  # Reduced from 1 second
 
@@ -89,7 +97,7 @@ def login_to_mt5(login, password, server):
         pyautogui.write(server, interval=0.01)  # Much faster typing
         pyautogui.press('enter')
         time.sleep(3)  # Reduced from 6 seconds - enough for login to process
-        print("Login complete.")
+        logger.info("Login complete.")
     finally:
         # Restore original pause setting
         pyautogui.PAUSE = original_pause
@@ -97,17 +105,19 @@ def login_to_mt5(login, password, server):
 
 def generate_report():
     """Generate report via Alt+E path"""
-    print("Generating report via Alt+E...")
+    logger = get_logger()
+    logger.info("Generating report via Alt+E...")
     pyautogui.hotkey('alt', 'e')
     time.sleep(2)
     pyautogui.press('r')
     time.sleep(2)
-    print("Report dialog opened (user/browser will open shortly).")
+    logger.info("Report dialog opened (user/browser will open shortly).")
 
 
 def save_report(login):
     """Saves report once it opens in browser"""
-    print("Saving report...")
+    logger = get_logger()
+    logger.info("Saving report...")
     time.sleep(5)
     pyautogui.hotkey('ctrl', 's')
     time.sleep(2)
@@ -119,15 +129,16 @@ def save_report(login):
     time.sleep(3)
 
     full_path = os.path.join(DOWNLOAD_FOLDER, f"{filename}.html")
-    print(f"Report saved: {full_path}")
+    logger.info(f"Report saved: {full_path}")
     return full_path
 
 
 def automate_mt5_report(login, password, server):
     """Main wrapper function to automate MT5 report generation for a single account"""
-    print("=" * 70)
-    print(f"MT5 REPORT AUTOMATION STARTED for account {login}")
-    print("=" * 70)
+    logger = get_logger()
+    logger.info("=" * 70)
+    logger.info(f"MT5 REPORT AUTOMATION STARTED for account {login}")
+    logger.info("=" * 70)
 
     try:
         launch_mt5()
@@ -135,11 +146,11 @@ def automate_mt5_report(login, password, server):
         generate_report()
         report_path = save_report(login)
 
-        print("Automation complete.")
+        logger.info("Automation complete.")
         return report_path
 
     except Exception as e:
-        print(f"Error: Automation failed: {e}")
+        logger.error(f"ERROR: Automation failed: {e}")
         return None
 
 

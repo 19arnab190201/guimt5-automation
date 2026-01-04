@@ -44,6 +44,10 @@ DOWNLOAD_FOLDER = r"C:\Users\Administrator\Desktop\report_automation"
 REPORT_SAVE_PATH = r"C:\Users\Administrator\Desktop\report_automation"
 # C:\Users\Administrator\Desktop\report_automation
 
+# ================= LOGGING CONFIGURATION =================
+# Directory where log files will be saved
+LOG_DIRECTORY = os.path.join(os.path.dirname(__file__), "logs")
+
 # ================= OTHER SETTINGS =================
 # Save parsed data as JSON files locally
 SAVE_JSON_FILES = True
